@@ -22,6 +22,8 @@ import type { MailboxContext } from "../lib/mailbox";
 import {
 	incomingTranslationToStoredBody,
 	isChineseLanguage,
+	isTraditionalChineseLanguage,
+	looksLikeTraditionalChinese,
 	translateIncomingEmail,
 	translateReplyForPreview,
 	type ReplyTranslationPreview,
@@ -54,6 +56,34 @@ function replaceTrailingQuoteWithOriginal(
 
 	if (!quotedBlock) return html;
 	return html.replace(TRAILING_QUOTED_REPLY_BLOCK_RE, quotedBlock);
+}
+
+function resolveTargetLanguageForReply(
+	target: { language: string; languageName: string },
+	originalEmail: EmailFull,
+): { language: string; languageName: string } {
+	if (
+		isChineseLanguage(target.language, target.languageName) &&
+		!isTraditionalChineseLanguage(target.language, target.languageName) &&
+		looksLikeTraditionalChinese(`${originalEmail.subject || ""}\n${originalEmail.body || ""}`)
+	) {
+		return {
+			language: "zh-Hant",
+			languageName: "Traditional Chinese",
+		};
+	}
+
+	return target;
+}
+
+function shouldTranslateReplyToTarget(
+	language: string,
+	languageName: string,
+): boolean {
+	return (
+		!isChineseLanguage(language, languageName) ||
+		isTraditionalChineseLanguage(language, languageName)
+	);
 }
 
 async function ensureOriginalLanguage(
@@ -111,11 +141,14 @@ async function resolveReplyBodyForRecipientLanguage(
 	targetLanguage?: string | null;
 	targetLanguageName?: string | null;
 }> {
-	const target = await ensureOriginalLanguage(c, stub, originalEmail);
+	const target = resolveTargetLanguageForReply(
+		await ensureOriginalLanguage(c, stub, originalEmail),
+		originalEmail,
+	);
 	const normalizedHtml = replaceTrailingQuoteWithOriginal(input.html, originalEmail);
 	const normalizedText = normalizedHtml ? stripHtmlToText(normalizedHtml) : input.text;
 
-	if (!target.language || isChineseLanguage(target.language, target.languageName)) {
+	if (!target.language || !shouldTranslateReplyToTarget(target.language, target.languageName)) {
 		return { html: normalizedHtml, text: normalizedText };
 	}
 
@@ -163,7 +196,10 @@ export async function handleReplyTranslationPreview(c: AppContext) {
 	const originalEmail = await resolveOriginalEmail(stub, rawOriginal);
 
 	try {
-		const target = await ensureOriginalLanguage(c, stub, originalEmail);
+		const target = resolveTargetLanguageForReply(
+			await ensureOriginalLanguage(c, stub, originalEmail),
+			originalEmail,
+		);
 		const normalizedHtml = replaceTrailingQuoteWithOriginal(html, originalEmail);
 		const preview = await translateReplyForPreview(c.env, {
 			html: normalizedHtml,
